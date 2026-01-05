@@ -183,16 +183,75 @@ $WslTempPath = (wsl.exe wslpath -u ($TempFile -replace '\\\\', '/')).Trim()
 $ClaudeChromeScript = @'
 #!/bin/bash
 set -e
+
+VERSION="__BRIDGE_VERSION__"
 RELAY_JS="$HOME/.local/lib/claude-chrome-bridge/wsl-relay.js"
 LOG_FILE="/tmp/claude-wsl-relay.log"
-[[ ! -f "$RELAY_JS" ]] && echo "ERROR: Relay not found" && exit 1
-cleanup() { rm -f "$FAKE_VERSION" 2>/dev/null; [[ -n "$RELAY_PID" ]] && kill "$RELAY_PID" 2>/dev/null; }
+WIN_LOG="/mnt/c/Users/$USER/AppData/Local/ClaudeWSLBridge/native-host.log"
+
+echo ""
+echo "========================================"
+echo "  Claude WSL Chrome Bridge v$VERSION"
+echo "========================================"
+echo ""
+
+# Check relay exists
+if [[ ! -f "$RELAY_JS" ]]; then
+    echo "ERROR: WSL relay not found at $RELAY_JS"
+    echo "Please reinstall the bridge."
+    exit 1
+fi
+
+# Cleanup handler
+cleanup() {
+    rm -f "$FAKE_VERSION" 2>/dev/null
+    [[ -n "$RELAY_PID" ]] && kill "$RELAY_PID" 2>/dev/null
+}
 trap cleanup EXIT INT TERM
-> "$LOG_FILE"; node "$RELAY_JS" >> "$LOG_FILE" 2>&1 & RELAY_PID=$!
-sleep 1; kill -0 "$RELAY_PID" 2>/dev/null || { echo "Relay failed. See $LOG_FILE"; exit 1; }
+
+# Start relay
+echo "[bridge] Starting WSL relay..."
+echo "[bridge] Log file: $LOG_FILE"
+> "$LOG_FILE"
+node "$RELAY_JS" >> "$LOG_FILE" 2>&1 &
+RELAY_PID=$!
+
+# Wait for relay to start
+sleep 1
+if ! kill -0 "$RELAY_PID" 2>/dev/null; then
+    echo ""
+    echo "ERROR: WSL relay failed to start!"
+    echo ""
+    echo "Last 10 lines of log:"
+    tail -10 "$LOG_FILE" 2>/dev/null || true
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. Make sure Chrome is open"
+    echo "  2. Click the Claude extension icon in Chrome"
+    echo "  3. Check Windows log: $WIN_LOG"
+    exit 1
+fi
+
+echo "[bridge] WSL relay started (PID: $RELAY_PID)"
+echo "[bridge] Connecting to Windows bridge..."
+echo ""
+
+# Wait briefly for connection (relay logs to file)
+sleep 1
+if grep -q "Connected to Windows bridge" "$LOG_FILE" 2>/dev/null; then
+    echo "[bridge] Connected to Windows!"
+elif grep -q "Connection attempt" "$LOG_FILE" 2>/dev/null; then
+    echo "[bridge] Waiting for Windows native-host..."
+    echo "[bridge] Make sure Chrome is open and click the Claude extension"
+    echo ""
+fi
+
+# Setup fake /proc/version
 FAKE_VERSION="/tmp/fake_proc_version_$$"
 echo "Linux version 6.6.87-generic" > "$FAKE_VERSION"
-exec unshare --user --map-root-user -m bash -c "mount --bind '$FAKE_VERSION' /proc/version; export CLAUDE_CODE_ENABLE_CFC=1; exec claude \\"\$@\\"" -- "$@"
+
+# Run Claude with Chrome integration
+exec unshare --user --map-root-user -m bash -c "mount --bind '$FAKE_VERSION' /proc/version; export CLAUDE_CODE_ENABLE_CFC=1; exec claude \"\$@\"" -- "$@"
 '@
 
 # Write claude-chrome script to temp file (UTF8 without BOM)
@@ -239,9 +298,10 @@ Write-Host "2. In WSL run: " -NoNewline; Write-Host "claude-chrome" -ForegroundC
 Write-Host ""
 `;
 
-// Write the self-contained installer
+// Write the self-contained installer (replace version placeholder in claude-chrome script)
 const outputPath = path.join(distDir, 'install.ps1');
-fs.writeFileSync(outputPath, installer);
+const finalInstaller = installer.replace(/__BRIDGE_VERSION__/g, VERSION);
+fs.writeFileSync(outputPath, finalInstaller);
 
 console.log(`Generated self-contained installer: ${outputPath}`);
 console.log(`  native-host.js: ${Math.round(nativeHostJs.length / 1024)}kb`);

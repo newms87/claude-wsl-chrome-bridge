@@ -9,6 +9,8 @@
  */
 
 import * as net from 'net';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   MessageDecoder,
   RawMessageAccumulator,
@@ -21,8 +23,60 @@ import { createLogger, createLifecycle, VERSION, DEFAULT_BRIDGE_PORT } from './s
 const WSL_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || String(DEFAULT_BRIDGE_PORT), 10);
 const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
 
+// Setup file logging (in addition to stderr)
+const LOG_FILE = path.join(
+  process.env.LOCALAPPDATA || process.env.HOME || '.',
+  'ClaudeWSLBridge',
+  'native-host.log'
+);
+
+// Ensure log directory exists
+try {
+  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+} catch {
+  // Ignore
+}
+
+// Rotate log if too large (> 1MB)
+try {
+  const stats = fs.statSync(LOG_FILE);
+  if (stats.size > 1024 * 1024) {
+    fs.renameSync(LOG_FILE, LOG_FILE + '.old');
+  }
+} catch {
+  // File doesn't exist yet
+}
+
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+
+// Custom logger that writes to both stderr and file
+function createFileLogger(component: string, debugEnabled: boolean) {
+  const baseLogger = createLogger(component, debugEnabled);
+  const writeToFile = (message: string): void => {
+    logStream.write(`[${component}] ${new Date().toISOString()} ${message}\n`);
+  };
+
+  return {
+    log: (message: string): void => {
+      baseLogger.log(message);
+      writeToFile(message);
+    },
+    debug: (message: string): void => {
+      baseLogger.debug(message);
+      if (debugEnabled) {
+        writeToFile(`DEBUG: ${message}`);
+      }
+    },
+    error: (context: string, error: unknown): void => {
+      baseLogger.error(context, error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      writeToFile(`ERROR [${context}]: ${errMsg}`);
+    },
+  };
+}
+
 // Initialize shared utilities
-const logger = createLogger('native-host', DEBUG);
+const logger = createFileLogger('native-host', DEBUG);
 const lifecycle = createLifecycle(logger);
 
 // State
