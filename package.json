@@ -1,6 +1,6 @@
 {
   "name": "claude-wsl-chrome-bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Bridge to enable Claude Code in WSL to communicate with Claude in Chrome on Windows",
   "type": "module",
   "scripts": {

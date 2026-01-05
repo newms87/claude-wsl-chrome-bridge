@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.dirname(__dirname);
 const distDir = path.join(projectDir, 'dist');
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 
 // Read the built JS files
 const nativeHostJs = fs.readFileSync(path.join(distDir, 'native-host.js'), 'utf-8');
@@ -193,13 +193,16 @@ echo "Linux version 6.6.87-generic" > "$FAKE_VERSION"
 exec unshare --user --map-root-user -m bash -c "mount --bind '$FAKE_VERSION' /proc/version; export CLAUDE_CODE_ENABLE_CFC=1; exec claude \\"\$@\\"" -- "$@"
 '@
 
+# Write claude-chrome script to temp file
+$ClaudeChromeTemp = [System.IO.Path]::GetTempFileName()
+Set-Content -Path $ClaudeChromeTemp -Value $ClaudeChromeScript -Encoding UTF8 -NoNewline
+$WslClaudeChromeTemp = (wsl.exe wslpath -u ($ClaudeChromeTemp -replace '\\\\', '/')).Trim()
+
 $WslInstall = @"
 set -e
 mkdir -p $WslLibDir $WslBinDir
 cp "$WslTempPath" "$WslLibDir/wsl-relay.js"
-cat > "$WslBinDir/claude-chrome" << 'EOF'
-$ClaudeChromeScript
-EOF
+cp "$WslClaudeChromeTemp" "$WslBinDir/claude-chrome"
 chmod +x "$WslBinDir/claude-chrome"
 grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.bashrc
 [[ -f ~/.zshrc ]] && ! grep -q '.local/bin' ~/.zshrc && echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.zshrc
@@ -207,6 +210,7 @@ echo "WSL done"
 "@
 
 wsl.exe bash -c $WslInstall
+Remove-Item $ClaudeChromeTemp -Force
 Remove-Item $TempFile -Force
 Write-Success "WSL installation complete!"
 
