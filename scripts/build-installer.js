@@ -207,8 +207,8 @@ mkdir -p $WslLibDir $WslBinDir
 cp "$WslTempPath" "$WslLibDir/wsl-relay.js"
 cp "$WslClaudeChromeTemp" "$WslBinDir/claude-chrome"
 chmod +x "$WslBinDir/claude-chrome"
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.bashrc
-[[ -f ~/.zshrc ]] && ! grep -q '.local/bin' ~/.zshrc && echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.zshrc
+grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\`$HOME/.local/bin:\`$PATH"' >> ~/.bashrc
+[[ -f ~/.zshrc ]] && ! grep -q '.local/bin' ~/.zshrc && echo 'export PATH="\`$HOME/.local/bin:\`$PATH"' >> ~/.zshrc
 echo "WSL done"
 "@
 
