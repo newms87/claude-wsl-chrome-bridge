@@ -2,7 +2,7 @@
  * Shared constants
  */
 
-export const VERSION = '1.0.2';
+export const VERSION = '1.0.3';
 
 export const DEFAULT_BRIDGE_PORT = 9333;
 

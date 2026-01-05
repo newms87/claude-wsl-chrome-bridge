@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.dirname(__dirname);
 const distDir = path.join(projectDir, 'dist');
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 
 // Read the built JS files
 const nativeHostJs = fs.readFileSync(path.join(distDir, 'native-host.js'), 'utf-8');
@@ -193,9 +193,10 @@ echo "Linux version 6.6.87-generic" > "$FAKE_VERSION"
 exec unshare --user --map-root-user -m bash -c "mount --bind '$FAKE_VERSION' /proc/version; export CLAUDE_CODE_ENABLE_CFC=1; exec claude \\"\$@\\"" -- "$@"
 '@
 
-# Write claude-chrome script to temp file
+# Write claude-chrome script to temp file (UTF8 without BOM)
 $ClaudeChromeTemp = [System.IO.Path]::GetTempFileName()
-Set-Content -Path $ClaudeChromeTemp -Value $ClaudeChromeScript -Encoding UTF8 -NoNewline
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($ClaudeChromeTemp, $ClaudeChromeScript, $Utf8NoBom)
 $WslClaudeChromeTemp = (wsl.exe wslpath -u ($ClaudeChromeTemp -replace '\\\\', '/')).Trim()
 
 $WslInstall = @"
