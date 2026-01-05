@@ -27,9 +27,11 @@ ls ~/.claude/chrome/chrome-native-host
 
 ### 3. Claude Chrome Extension
 
-Install the Claude browser extension in Chrome:
+Install the **official** Claude browser extension in Chrome:
 - Visit https://claude.ai/chrome
 - Or search "Claude" in the Chrome Web Store
+
+> **Note**: The bridge is configured for the official Claude extension ID (`fcoeoabgfenejglbffodgkkbkcdhcgfn`). This ID is fixed for all Chrome Web Store installs. Unpacked/developer extensions will have different IDs and won't work.
 
 ## The Problem
 
