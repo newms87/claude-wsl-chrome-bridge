@@ -1,24 +1,49 @@
 /**
  * WSL Relay - Bridges Windows Chrome Bridge to Claude's native host
  *
- * This process:
- * 1. Connects to the Windows native-host via TCP
- * 2. Spawns Claude's chrome-native-host process
- * 3. Forwards messages bidirectionally between TCP and Claude's native host
- *
- * Flow:
- *   Chrome ↔ Windows native-host ↔ TCP ↔ WSL relay ↔ Claude's native-host
+ * Architecture:
+ *   Chrome ↔ Windows native-host ↔ TCP ↔ WSL relay (this) ↔ Claude's native-host
  */
 
 import * as net from 'net';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  RawMessageAccumulator,
-  encodeMessage,
-  LENGTH_PREFIX_SIZE,
-} from './protocol.js';
+import { RawMessageAccumulator, encodeMessage, LENGTH_PREFIX_SIZE } from './protocol.js';
+import { createLogger, createLifecycle, VERSION, DEFAULT_BRIDGE_PORT } from './shared/index.js';
+
+// Configuration
+const TCP_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || String(DEFAULT_BRIDGE_PORT), 10);
+const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
+
+// Retry configuration
+const MAX_RETRIES = 30;
+const RETRY_DELAY_MS = 2000;
+const CONNECTION_TIMEOUT = 5000;
+
+// Initialize shared utilities
+const logger = createLogger('wsl-relay', DEBUG);
+const lifecycle = createLifecycle(logger);
+
+// State
+let tcpSocket: net.Socket | null = null;
+let claudeProcess: ChildProcess | null = null;
+const tcpAccumulator = new RawMessageAccumulator();
+const claudeAccumulator = new RawMessageAccumulator();
+
+// Register cleanup handlers
+lifecycle.onCleanup(() => {
+  if (claudeProcess) {
+    claudeProcess.kill();
+    claudeProcess = null;
+  }
+});
+lifecycle.onCleanup(() => {
+  if (tcpSocket) {
+    tcpSocket.destroy();
+    tcpSocket = null;
+  }
+});
 
 /**
  * Auto-detect Windows host IP from WSL2 gateway
@@ -62,40 +87,8 @@ function findClaudeNativeHost(): string {
   );
 }
 
-// Configuration
-const TCP_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || '9333', 10);
 const TCP_HOST = getWindowsHostIP();
-const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
 const CLAUDE_NATIVE_HOST = process.env.CLAUDE_NATIVE_HOST || findClaudeNativeHost();
-
-// Retry configuration - more persistent to allow time for Chrome to spawn native-host
-const MAX_RETRIES = 30;
-const RETRY_DELAY_MS = 2000;
-const CONNECTION_TIMEOUT = 5000;
-
-// State
-let tcpSocket: net.Socket | null = null;
-let claudeProcess: ChildProcess | null = null;
-let isConnected = false;
-let shuttingDown = false;
-const tcpAccumulator = new RawMessageAccumulator();
-const claudeAccumulator = new RawMessageAccumulator();
-
-function log(message: string): void {
-  const timestamp = new Date().toISOString();
-  process.stderr.write(`[wsl-relay] ${timestamp} ${message}\n`);
-}
-
-function debug(message: string): void {
-  if (DEBUG) {
-    log(`DEBUG: ${message}`);
-  }
-}
-
-function logError(context: string, error: unknown): void {
-  const msg = error instanceof Error ? error.message : String(error);
-  log(`ERROR [${context}]: ${msg}`);
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,10 +99,10 @@ function sleep(ms: number): Promise<void> {
  */
 function sendToTcp(frame: Buffer): void {
   if (tcpSocket && !tcpSocket.destroyed) {
-    debug(`Sending to TCP: ${frame.length} bytes`);
+    logger.debug(`Sending to TCP: ${frame.length} bytes`);
     tcpSocket.write(frame);
   } else {
-    log('WARNING: TCP not connected, dropping message');
+    logger.log('WARNING: TCP not connected, dropping message');
   }
 }
 
@@ -117,11 +110,11 @@ function sendToTcp(frame: Buffer): void {
  * Send a framed message to Claude's native host
  */
 function sendToClaude(frame: Buffer): void {
-  if (claudeProcess && claudeProcess.stdin && !claudeProcess.stdin.destroyed) {
-    debug(`Sending to Claude: ${frame.length} bytes`);
+  if (claudeProcess?.stdin && !claudeProcess.stdin.destroyed) {
+    logger.debug(`Sending to Claude: ${frame.length} bytes`);
     claudeProcess.stdin.write(frame);
   } else {
-    log('WARNING: Claude process not available, dropping message');
+    logger.log('WARNING: Claude process not available, dropping message');
   }
 }
 
@@ -133,10 +126,10 @@ async function connectWithRetry(): Promise<net.Socket> {
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      log(`Retry attempt ${attempt + 1}/${MAX_RETRIES} in ${RETRY_DELAY_MS}ms...`);
+      logger.log(`Retry attempt ${attempt + 1}/${MAX_RETRIES} in ${RETRY_DELAY_MS}ms...`);
       await sleep(RETRY_DELAY_MS);
     }
-    log(`Connecting to Windows bridge at ${TCP_HOST}:${TCP_PORT}...`);
+    logger.log(`Connecting to Windows bridge at ${TCP_HOST}:${TCP_PORT}...`);
 
     try {
       const socket = await new Promise<net.Socket>((resolve, reject) => {
@@ -159,7 +152,7 @@ async function connectWithRetry(): Promise<net.Socket> {
       return socket;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      log(`Connection attempt ${attempt + 1} failed: ${lastError.message}`);
+      logger.log(`Connection attempt ${attempt + 1} failed: ${lastError.message}`);
     }
   }
 
@@ -172,34 +165,33 @@ async function connectWithRetry(): Promise<net.Socket> {
  * Spawn Claude's chrome native host process
  */
 function spawnClaudeNativeHost(): ChildProcess {
-  log(`Spawning Claude native host: ${CLAUDE_NATIVE_HOST}`);
+  logger.log(`Spawning Claude native host: ${CLAUDE_NATIVE_HOST}`);
 
   const proc = spawn(CLAUDE_NATIVE_HOST, [], {
-    stdio: ['pipe', 'pipe', 'inherit'], // stdin, stdout piped; stderr inherited
+    stdio: ['pipe', 'pipe', 'inherit'],
   });
 
   proc.on('error', (err) => {
-    logError('Claude process spawn', err);
-    cleanup();
+    logger.error('Claude process spawn', err);
+    lifecycle.shutdown();
   });
 
   proc.on('exit', (code, signal) => {
-    log(`Claude process exited: code=${code}, signal=${signal}`);
-    if (!shuttingDown) {
-      cleanup();
+    logger.log(`Claude process exited: code=${code}, signal=${signal}`);
+    if (!lifecycle.isShuttingDown()) {
+      lifecycle.shutdown();
     }
   });
 
-  // Forward Claude's stdout to TCP
   proc.stdout?.on('data', (chunk: Buffer) => {
-    debug(`Claude stdout: ${chunk.length} bytes`);
+    logger.debug(`Claude stdout: ${chunk.length} bytes`);
     try {
       const frames = claudeAccumulator.accumulate(chunk);
       for (const frame of frames) {
         sendToTcp(frame);
       }
     } catch (err) {
-      logError('Claude stdout processing', err);
+      logger.error('Claude stdout processing', err);
     }
   });
 
@@ -211,77 +203,43 @@ function spawnClaudeNativeHost(): ChildProcess {
  */
 function setupTcpSocket(socket: net.Socket): void {
   tcpSocket = socket;
-  isConnected = true;
   tcpAccumulator.reset();
 
   socket.on('data', (chunk: Buffer) => {
-    debug(`TCP data: ${chunk.length} bytes`);
+    logger.debug(`TCP data: ${chunk.length} bytes`);
     try {
       const frames = tcpAccumulator.accumulate(chunk);
       for (const frame of frames) {
-        // Parse to check for bridge-ready
         const length = frame.readUInt32LE(0);
         const payload = frame.subarray(LENGTH_PREFIX_SIZE, LENGTH_PREFIX_SIZE + length);
 
         try {
           const message = JSON.parse(payload.toString('utf-8'));
           if (message?.type === 'bridge-ready') {
-            log(`Bridge ready (v${message.version || 'unknown'})`);
-            continue; // Don't forward internal messages
+            logger.log(`Bridge ready (v${message.version || 'unknown'})`);
+            continue;
           }
         } catch {
           // Not JSON or parse error, forward anyway
         }
 
-        // Forward to Claude's native host
         sendToClaude(frame);
       }
     } catch (err) {
-      logError('TCP data processing', err);
+      logger.error('TCP data processing', err);
     }
   });
 
   socket.on('close', () => {
-    log('TCP connection closed');
-    isConnected = false;
-    if (!shuttingDown) {
-      cleanup();
+    logger.log('TCP connection closed');
+    if (!lifecycle.isShuttingDown()) {
+      lifecycle.shutdown();
     }
   });
 
   socket.on('error', (err) => {
-    logError('TCP socket', err);
-    isConnected = false;
+    logger.error('TCP socket', err);
   });
-}
-
-function cleanup(): void {
-  if (shuttingDown) return;
-  shuttingDown = true;
-
-  log('Cleaning up...');
-
-  if (claudeProcess) {
-    try {
-      claudeProcess.kill();
-    } catch {
-      // Ignore
-    }
-    claudeProcess = null;
-  }
-
-  if (tcpSocket) {
-    try {
-      tcpSocket.destroy();
-    } catch {
-      // Ignore
-    }
-    tcpSocket = null;
-  }
-
-  setTimeout(() => {
-    process.exit(0);
-  }, 100);
 }
 
 function printConnectionHelp(): void {
@@ -307,38 +265,28 @@ To fix:
 `);
 }
 
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
-process.on('SIGHUP', cleanup);
-process.on('uncaughtException', (err) => {
-  logError('uncaughtException', err);
-  cleanup();
-});
-
 async function main(): Promise<void> {
-  log('='.repeat(60));
-  log('Claude WSL Chrome Bridge - WSL Relay');
-  log(`Version: 1.0.0`);
-  log(`Windows bridge: ${TCP_HOST}:${TCP_PORT}`);
-  log(`Claude native host: ${CLAUDE_NATIVE_HOST}`);
-  log(`Debug: ${DEBUG}`);
-  log('='.repeat(60));
+  logger.log('='.repeat(60));
+  logger.log('Claude WSL Chrome Bridge - WSL Relay');
+  logger.log(`Version: ${VERSION}`);
+  logger.log(`Windows bridge: ${TCP_HOST}:${TCP_PORT}`);
+  logger.log(`Claude native host: ${CLAUDE_NATIVE_HOST}`);
+  logger.log(`Debug: ${DEBUG}`);
+  logger.log('='.repeat(60));
 
   try {
-    // Connect to Windows bridge first
     const socket = await connectWithRetry();
-    log('Connected to Windows bridge');
+    logger.log('Connected to Windows bridge');
 
     setupTcpSocket(socket);
 
-    // Spawn Claude's native host
     claudeProcess = spawnClaudeNativeHost();
-    log('Claude native host spawned');
+    logger.log('Claude native host spawned');
 
-    log('Relay ready - bridging Chrome ↔ Claude');
+    logger.log('Relay ready - bridging Chrome ↔ Claude');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log(`FATAL: ${msg}`);
+    logger.log(`FATAL: ${msg}`);
     printConnectionHelp();
     process.exit(1);
   }
