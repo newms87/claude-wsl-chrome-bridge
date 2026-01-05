@@ -1,13 +1,13 @@
 {
   "name": "claude-wsl-chrome-bridge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Bridge to enable Claude Code in WSL to communicate with Claude in Chrome on Windows",
   "type": "module",
   "scripts": {
     "build": "npm run build:protocol && npm run build:wsl && npm run build:native-host",
     "build:protocol": "tsc -p tsconfig.json",
-    "build:wsl": "esbuild src/wsl-relay.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/wsl-relay.js",
-    "build:native-host": "esbuild src/native-host.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/native-host.js",
+    "build:wsl": "esbuild src/wsl-relay.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/wsl-relay.js --define:__VERSION__=\\\"$(node -p \"require('./package.json').version\")\\\"",
+    "build:native-host": "esbuild src/native-host.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/native-host.js --define:__VERSION__=\\\"$(node -p \"require('./package.json').version\")\\\"",
     "build:installer": "node scripts/build-installer.js",
     "build:test": "tsc -p tsconfig.test.json",
     "release": "npm run build && npm run build:installer",

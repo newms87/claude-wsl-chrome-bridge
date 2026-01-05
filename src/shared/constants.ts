@@ -2,7 +2,9 @@
  * Shared constants
  */
 
-export const VERSION = '1.0.3';
+// Version is injected at build time by esbuild --define
+declare const __VERSION__: string;
+export const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
 
 export const DEFAULT_BRIDGE_PORT = 9333;
 

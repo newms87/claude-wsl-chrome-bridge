@@ -14,7 +14,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.dirname(__dirname);
 const distDir = path.join(projectDir, 'dist');
 
-const VERSION = '1.0.3';
+// Read version from package.json (single source of truth)
+const packageJson = JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf-8'));
+const VERSION = packageJson.version;
 
 // Read the built JS files
 const nativeHostJs = fs.readFileSync(path.join(distDir, 'native-host.js'), 'utf-8');
