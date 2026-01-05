@@ -287,18 +287,21 @@ function cleanup(): void {
 function printConnectionHelp(): void {
   process.stderr.write(`
 ================================================================================
-ERROR: Failed to connect to Windows Chrome Bridge
+ERROR: Failed to connect to Windows Native Host
 
 The WSL relay could not connect to native-host on Windows at ${TCP_HOST}:${TCP_PORT}
 
 To fix:
-1. On Windows, start the bridge:
-   node "C:\\Users\\<you>\\AppData\\Local\\ClaudeWSLBridge\\native-host.js"
+1. Make sure Chrome is open with the Claude extension active
+   (The extension spawns native-host.js automatically)
 
-2. Make sure Windows Firewall allows the connection
+2. Make sure Windows Firewall allows the connection on port ${TCP_PORT}
 
 3. If using WSL2, ensure networking is working:
    wsl --shutdown  (then restart WSL)
+
+4. Try manually starting the native host:
+   node "C:\\Users\\<you>\\AppData\\Local\\ClaudeWSLBridge\\native-host.js"
 
 ================================================================================
 `);

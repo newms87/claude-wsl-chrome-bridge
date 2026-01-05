@@ -4,13 +4,11 @@
   "description": "Bridge to enable Claude Code in WSL to communicate with Claude in Chrome on Windows",
   "type": "module",
   "scripts": {
-    "build": "npm run build:protocol && npm run build:wsl && npm run build:windows && npm run build:bridge",
+    "build": "npm run build:protocol && npm run build:wsl && npm run build:native-host",
     "build:protocol": "tsc -p tsconfig.json",
     "build:wsl": "esbuild src/wsl-relay.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/wsl-relay.js",
-    "build:windows": "esbuild src/native-host.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/native-host.js",
-    "build:bridge": "esbuild src/bridge-server.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/bridge-server.js",
+    "build:native-host": "esbuild src/native-host.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/native-host.js",
     "build:test": "tsc -p tsconfig.test.json",
-    "bridge": "node dist/bridge-server.js",
     "test": "npm run build:protocol && npm run build:test && node --test test/*.test.js",
     "test:connectivity": "node test/test-connectivity.js"
   },

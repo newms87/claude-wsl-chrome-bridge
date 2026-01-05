@@ -1,13 +1,16 @@
 /**
- * Native Messaging Handler - Bridges Chrome to Bridge Server
+ * Native Messaging Host - Bridges Chrome to WSL Claude
  *
  * This process:
  * 1. Is spawned by Chrome as a Native Messaging host (stdio protocol)
- * 2. Connects to the Bridge Server on localhost:9334
- * 3. Bridges messages bidirectionally between Chrome and Bridge Server
+ * 2. Listens on TCP:9333 for WSL relay connections
+ * 3. Bridges messages bidirectionally between Chrome and WSL
  *
- * This is a short-lived process - Chrome may spawn and close it multiple times.
- * The Bridge Server maintains persistent connections.
+ * Architecture:
+ *   Chrome ↔ native-host (this) ↔ TCP:9333 ↔ WSL Relay ↔ Claude
+ *
+ * This is a PERSISTENT process - Chrome keeps it alive as long as we
+ * respond to ping/get_status messages.
  *
  * IMPORTANT: All logging must go to stderr - stdout is reserved for Native Messaging
  */
@@ -21,20 +24,18 @@ import {
 } from './protocol.js';
 
 // Configuration
-const BRIDGE_PORT = parseInt(process.env.CLAUDE_BRIDGE_HANDLER_PORT || '9334', 10);
-const BRIDGE_HOST = '127.0.0.1';
+const WSL_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || '9333', 10);
 const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
-const CONNECT_TIMEOUT = 2000;
 
 // State
-let bridgeSocket: net.Socket | null = null;
+let wslServer: net.Server | null = null;
+let wslClient: net.Socket | null = null;
 const chromeDecoder = new MessageDecoder();
-const bridgeAccumulator = new RawMessageAccumulator();
+const wslAccumulator = new RawMessageAccumulator();
 let shuttingDown = false;
-let bridgeConnected = false;
 
-// Queue for messages received before bridge is connected
-const pendingForBridge: Buffer[] = [];
+// Queue for messages received from Chrome before WSL is connected
+const pendingForWsl: Buffer[] = [];
 
 function log(message: string): void {
   const timestamp = new Date().toISOString();
@@ -66,27 +67,27 @@ function sendToChrome(message: unknown): void {
 }
 
 /**
- * Forward a framed message to the bridge server
+ * Forward a framed message to WSL relay
  */
-function forwardToBridge(frame: Buffer): void {
-  if (bridgeSocket && !bridgeSocket.destroyed && bridgeConnected) {
-    debug(`Forwarding to bridge: ${frame.length} bytes`);
-    bridgeSocket.write(frame);
+function forwardToWsl(frame: Buffer): void {
+  if (wslClient && !wslClient.destroyed) {
+    debug(`Forwarding to WSL: ${frame.length} bytes`);
+    wslClient.write(frame);
   } else {
-    log(`Bridge not connected yet, queuing message (${pendingForBridge.length + 1} pending)`);
-    pendingForBridge.push(frame);
+    log(`WSL not connected yet, queuing message (${pendingForWsl.length + 1} pending)`);
+    pendingForWsl.push(frame);
   }
 }
 
 /**
- * Flush pending messages to bridge when it connects
+ * Flush pending messages to WSL when it connects
  */
-function flushPendingToBridge(): void {
-  if (pendingForBridge.length > 0 && bridgeSocket && !bridgeSocket.destroyed && bridgeConnected) {
-    log(`Flushing ${pendingForBridge.length} pending messages to bridge`);
-    while (pendingForBridge.length > 0) {
-      const frame = pendingForBridge.shift()!;
-      bridgeSocket.write(frame);
+function flushPendingToWsl(): void {
+  if (pendingForWsl.length > 0 && wslClient && !wslClient.destroyed) {
+    log(`Flushing ${pendingForWsl.length} pending messages to WSL`);
+    while (pendingForWsl.length > 0) {
+      const frame = pendingForWsl.shift()!;
+      wslClient.write(frame);
     }
   }
 }
@@ -109,18 +110,18 @@ function handleChromeMessage(message: unknown): void {
     log('Responding to get_status');
     sendToChrome({
       type: 'status',
-      connected: bridgeConnected,
+      connected: wslClient !== null && !wslClient.destroyed,
       version: '1.0.0',
     });
     return;
   }
 
-  // Forward all other messages to bridge (and ultimately to Claude's native host)
+  // Forward all other messages to WSL (and ultimately to Claude's native host)
   try {
     const encoded = encodeMessage(message);
-    forwardToBridge(encoded);
+    forwardToWsl(encoded);
   } catch (err) {
-    logError('forward to bridge', err);
+    logError('forward to WSL', err);
   }
 }
 
@@ -132,7 +133,7 @@ function setupChromeStdin(): void {
 
   process.stdin.on('data', (chunk: Buffer) => {
     log(`Received ${chunk.length} bytes from Chrome stdin`);
-    log(`Raw data (hex): ${chunk.toString('hex').slice(0, 100)}`);
+    debug(`Raw data (hex): ${chunk.toString('hex').slice(0, 100)}`);
     try {
       const messages = chromeDecoder.decode(chunk);
       log(`Decoded ${messages.length} message(s) from Chrome`);
@@ -161,78 +162,95 @@ function setupChromeStdin(): void {
 }
 
 /**
- * Connect to the bridge server
+ * Setup TCP server for WSL relay connections
  */
-function connectToBridge(): void {
-  log(`Connecting to bridge server at ${BRIDGE_HOST}:${BRIDGE_PORT}...`);
+function setupWslServer(): void {
+  wslServer = net.createServer((socket) => {
+    const clientAddr = `${socket.remoteAddress}:${socket.remotePort}`;
+    log(`WSL relay connected from ${clientAddr}`);
 
-  bridgeSocket = net.createConnection({ port: BRIDGE_PORT, host: BRIDGE_HOST });
+    // Only allow one WSL client at a time
+    if (wslClient && !wslClient.destroyed) {
+      log('Replacing existing WSL connection');
+      wslClient.destroy();
+    }
 
-  const timeout = setTimeout(() => {
-    if (!bridgeConnected) {
-      log('Connection to bridge server timed out');
+    wslClient = socket;
+    wslAccumulator.reset();
+
+    // Flush any pending messages from Chrome
+    flushPendingToWsl();
+
+    // Handle incoming data from WSL
+    socket.on('data', (chunk: Buffer) => {
+      try {
+        const frames = wslAccumulator.accumulate(chunk);
+        for (const frame of frames) {
+          // Parse the message
+          const length = frame.readUInt32LE(0);
+          const payload = frame.subarray(LENGTH_PREFIX_SIZE, LENGTH_PREFIX_SIZE + length);
+
+          try {
+            const message = JSON.parse(payload.toString('utf-8'));
+
+            // Check for internal bridge messages
+            if (message?.type === 'bridge-ready') {
+              debug('Received bridge-ready from WSL (ignoring)');
+              continue;
+            }
+
+            // Forward to Chrome
+            log(`Message from WSL (${frame.length} bytes): ${payload.toString('utf-8').slice(0, 300)}`);
+            sendToChrome(message);
+          } catch {
+            // Not valid JSON, still try to forward
+            logError('WSL message parse', 'Invalid JSON, dropping message');
+          }
+        }
+      } catch (err) {
+        logError('WSL data processing', err);
+      }
+    });
+
+    socket.on('close', () => {
+      log(`WSL relay disconnected: ${clientAddr}`);
+      if (wslClient === socket) {
+        wslClient = null;
+        wslAccumulator.reset();
+      }
+    });
+
+    socket.on('error', (err) => {
+      logError(`WSL socket ${clientAddr}`, err);
+    });
+
+    // Send welcome message
+    const welcome = encodeMessage({
+      type: 'bridge-ready',
+      version: '1.0.0',
+      port: WSL_PORT,
+    });
+    socket.write(welcome);
+  });
+
+  wslServer.on('error', (err) => {
+    logError('WSL server', err);
+    const errWithCode = err as NodeJS.ErrnoException;
+    if (errWithCode.code === 'EADDRINUSE') {
+      log(`FATAL: Port ${WSL_PORT} already in use`);
       sendToChrome({
         jsonrpc: '2.0',
         error: {
           code: -32603,
-          message: 'Bridge server connection timeout. Is bridge-server.js running?',
+          message: `Port ${WSL_PORT} already in use. Is another native-host running?`,
         },
       });
       cleanup();
     }
-  }, CONNECT_TIMEOUT);
-
-  bridgeSocket.on('connect', () => {
-    clearTimeout(timeout);
-    bridgeConnected = true;
-    log('Connected to bridge server');
-    flushPendingToBridge();
   });
 
-  bridgeSocket.on('data', (chunk: Buffer) => {
-    try {
-      const frames = bridgeAccumulator.accumulate(chunk);
-      for (const frame of frames) {
-        // Parse the message
-        const length = frame.readUInt32LE(0);
-        const payload = frame.subarray(LENGTH_PREFIX_SIZE, LENGTH_PREFIX_SIZE + length);
-        const message = JSON.parse(payload.toString('utf-8'));
-
-        // Check for internal messages
-        if (message?.type === 'handler-ready') {
-          debug(`Bridge says handler ready, WSL connected: ${message.wslConnected}`);
-          continue;
-        }
-
-        // Forward to Chrome
-        sendToChrome(message);
-      }
-    } catch (err) {
-      logError('Bridge data processing', err);
-    }
-  });
-
-  bridgeSocket.on('close', () => {
-    log('Bridge connection closed');
-    bridgeConnected = false;
-    // Don't cleanup - let Chrome stdin closing trigger cleanup
-  });
-
-  bridgeSocket.on('error', (err) => {
-    clearTimeout(timeout);
-    logError('Bridge socket', err);
-    bridgeConnected = false;
-
-    const errWithCode = err as NodeJS.ErrnoException;
-    if (errWithCode.code === 'ECONNREFUSED') {
-      sendToChrome({
-        jsonrpc: '2.0',
-        error: {
-          code: -32603,
-          message: 'Bridge server not running. Please start bridge-server.js first.',
-        },
-      });
-    }
+  wslServer.listen(WSL_PORT, '0.0.0.0', () => {
+    log(`WSL server listening on 0.0.0.0:${WSL_PORT}`);
   });
 }
 
@@ -242,9 +260,14 @@ function cleanup(): void {
 
   log('Cleaning up...');
 
-  if (bridgeSocket) {
-    try { bridgeSocket.destroy(); } catch { /* ignore */ }
-    bridgeSocket = null;
+  if (wslClient) {
+    try { wslClient.destroy(); } catch { /* ignore */ }
+    wslClient = null;
+  }
+
+  if (wslServer) {
+    try { wslServer.close(); } catch { /* ignore */ }
+    wslServer = null;
   }
 
   setTimeout(() => process.exit(0), 100);
@@ -258,9 +281,9 @@ process.on('unhandledRejection', (reason) => { logError('unhandledRejection', re
 
 function main(): void {
   log('='.repeat(60));
-  log('Claude WSL Chrome Bridge - Native Host Handler');
+  log('Claude WSL Chrome Bridge - Native Host');
   log('Version: 1.0.0');
-  log(`Bridge Server: ${BRIDGE_HOST}:${BRIDGE_PORT}`);
+  log(`WSL Port: ${WSL_PORT}`);
   log(`Debug: ${DEBUG}`);
   log('='.repeat(60));
 
@@ -271,7 +294,9 @@ function main(): void {
   }
 
   setupChromeStdin();
-  connectToBridge();
+  setupWslServer();
+
+  log('Native host ready. Waiting for connections...');
 }
 
 main();
