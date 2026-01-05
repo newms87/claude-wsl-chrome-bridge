@@ -2,6 +2,35 @@
 
 Enable Claude Code running in WSL to use Chrome browser integration on Windows.
 
+## Prerequisites
+
+Before installing this bridge, you need:
+
+### 1. Claude Code in WSL
+
+Install Claude Code in your WSL environment:
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+### 2. Enable Chrome Integration in Claude Code
+
+Run Claude Code once and enable Chrome integration. This creates the native host script that the bridge needs:
+```bash
+claude
+```
+
+Then in Claude, type `/chrome` or enable it via settings. Verify it worked:
+```bash
+ls ~/.claude/chrome/chrome-native-host
+```
+
+### 3. Claude Chrome Extension
+
+Install the Claude browser extension in Chrome:
+- Visit https://claude.ai/chrome
+- Or search "Claude" in the Chrome Web Store
+
 ## The Problem
 
 Claude Code's Chrome integration doesn't work natively in WSL because:
@@ -21,14 +50,19 @@ Chrome Extension <-> Windows Native Host <-> TCP:9333 <-> WSL Relay <-> Claude C
 
 ### Quick Install (Recommended)
 
-Run this in **PowerShell as Administrator**:
+Run this in **PowerShell** (Administrator recommended for firewall rule):
 
 ```powershell
 irm "https://raw.githubusercontent.com/newms87/claude-wsl-chrome-bridge/master/dist/install.ps1" -OutFile install.ps1
 .\install.ps1
 ```
 
-This installs both the Windows native host and the WSL relay automatically.
+This installs:
+- **Windows**: Native host in `%LOCALAPPDATA%\ClaudeWSLBridge\`
+- **WSL**: Relay and `claude-chrome` command in `~/.local/bin/`
+- **Firewall**: Inbound rule for port 9333 (requires admin)
+
+> **Note**: If not running as admin, the firewall rule may fail. You can add it manually or run the installer again as admin.
 
 ### After Installation
 
@@ -104,6 +138,15 @@ The Windows native host isn't running. Try:
    ```powershell
    Get-NetFirewallRule -DisplayName "Claude WSL Chrome Bridge"
    ```
+
+#### Firewall rule missing
+
+If the installer couldn't create the firewall rule (requires admin), add it manually:
+
+```powershell
+# Run as Administrator
+New-NetFirewallRule -DisplayName "Claude WSL Chrome Bridge" -Direction Inbound -Protocol TCP -LocalPort 9333 -Action Allow -Profile Private
+```
 
 #### Manual Windows native host test
 
