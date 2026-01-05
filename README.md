@@ -25,13 +25,15 @@ Then in Claude, type `/chrome` or enable it via settings. Verify it worked:
 ls ~/.claude/chrome/chrome-native-host
 ```
 
-### 3. Claude Chrome Extension
+### 3. Claude Code Chrome Extension
 
-Install the **official** Claude browser extension in Chrome:
-- Visit https://claude.ai/chrome
-- Or search "Claude" in the Chrome Web Store
+Install the **Claude Code** browser extension (not just Claude.ai):
+- Visit the [Chrome Web Store](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn)
+- Or search "Claude Code" in the Chrome Web Store
 
-> **Note**: The bridge is configured for the official Claude extension ID (`fcoeoabgfenejglbffodgkkbkcdhcgfn`). This ID is fixed for all Chrome Web Store installs. Unpacked/developer extensions will have different IDs and won't work.
+This is the extension that enables Claude Code to interact with your browser (take screenshots, read pages, etc.).
+
+> **Note**: The bridge is configured for the official extension ID (`fcoeoabgfenejglbffodgkkbkcdhcgfn`). This ID is fixed for all Chrome Web Store installs. Unpacked/developer extensions have different IDs and won't work.
 
 ## The Problem
 
@@ -127,8 +129,8 @@ Get-Content "$env:LOCALAPPDATA\ClaudeWSLBridge\native-host.log" -Tail 50
 #### "Extension not connected"
 
 1. Make sure Chrome is running
-2. Click the Claude extension icon in Chrome toolbar
-3. Check that the extension is installed from https://claude.ai/chrome
+2. Click the Claude Code extension icon in Chrome toolbar
+3. Check that the extension is installed from the [Chrome Web Store](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn)
 
 #### "Connection timeout" in WSL log
 
