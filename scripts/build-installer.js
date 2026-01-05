@@ -201,18 +201,29 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllText($ClaudeChromeTemp, $ClaudeChromeScript, $Utf8NoBom)
 $WslClaudeChromeTemp = (wsl.exe wslpath -u ($ClaudeChromeTemp -replace '\\\\', '/')).Trim()
 
-$WslInstall = @"
+# Write WSL install script to temp file (avoids quoting issues with bash -c)
+$WslInstallScript = @'
+#!/bin/bash
 set -e
-mkdir -p $WslLibDir $WslBinDir
-cp "$WslTempPath" "$WslLibDir/wsl-relay.js"
-cp "$WslClaudeChromeTemp" "$WslBinDir/claude-chrome"
-chmod +x "$WslBinDir/claude-chrome"
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="\`$HOME/.local/bin:\`$PATH"' >> ~/.bashrc
-[[ -f ~/.zshrc ]] && ! grep -q '.local/bin' ~/.zshrc && echo 'export PATH="\`$HOME/.local/bin:\`$PATH"' >> ~/.zshrc
+RELAY_SRC="$1"
+CLAUDE_CHROME_SRC="$2"
+LIB_DIR="$HOME/.local/lib/claude-chrome-bridge"
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$LIB_DIR" "$BIN_DIR"
+cp "$RELAY_SRC" "$LIB_DIR/wsl-relay.js"
+cp "$CLAUDE_CHROME_SRC" "$BIN_DIR/claude-chrome"
+chmod +x "$BIN_DIR/claude-chrome"
+grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+[[ -f ~/.zshrc ]] && ! grep -q '.local/bin' ~/.zshrc && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 echo "WSL done"
-"@
+'@
 
-wsl.exe bash -c $WslInstall
+$WslInstallTemp = [System.IO.Path]::GetTempFileName()
+[System.IO.File]::WriteAllText($WslInstallTemp, $WslInstallScript, $Utf8NoBom)
+$WslInstallPath = (wsl.exe wslpath -u ($WslInstallTemp -replace '\\\\', '/')).Trim()
+
+wsl.exe bash "$WslInstallPath" "$WslTempPath" "$WslClaudeChromeTemp"
+Remove-Item $WslInstallTemp -Force
 Remove-Item $ClaudeChromeTemp -Force
 Remove-Item $TempFile -Force
 Write-Success "WSL installation complete!"
