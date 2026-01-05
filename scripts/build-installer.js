@@ -59,7 +59,8 @@ $WslRelayBase64 = @'
 ${wslRelayBase64}
 '@
 
-# Configuration
+# Chrome Native Messaging configuration
+# These must match what Claude Code's Chrome extension expects
 $HostName = "com.anthropic.claude_code_browser_extension"
 $ChromeExtensionId = "fcoeoabgfenejglbffodgkkbkcdhcgfn"
 $RegistryPath = "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\$HostName"

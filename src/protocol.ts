@@ -164,29 +164,3 @@ export class RawMessageAccumulator {
   }
 }
 
-/**
- * Encode raw bytes with length prefix (for TCP relay)
- * @param data - Raw data to encode
- * @returns Buffer with length prefix + data
- */
-export function encodeRawWithPrefix(data: Buffer): Buffer {
-  const header = Buffer.alloc(LENGTH_PREFIX_SIZE);
-  header.writeUInt32LE(data.length, 0);
-  return Buffer.concat([header, data]);
-}
-
-/**
- * Extract payload from a framed message (removes length prefix)
- * @param frame - Complete frame with length prefix
- * @returns Payload without length prefix
- */
-export function extractPayload(frame: Buffer): Buffer {
-  if (frame.length < LENGTH_PREFIX_SIZE) {
-    throw new Error('Frame too short to contain length prefix');
-  }
-  const length = frame.readUInt32LE(0);
-  if (frame.length < LENGTH_PREFIX_SIZE + length) {
-    throw new Error('Frame is incomplete');
-  }
-  return frame.subarray(LENGTH_PREFIX_SIZE, LENGTH_PREFIX_SIZE + length);
-}

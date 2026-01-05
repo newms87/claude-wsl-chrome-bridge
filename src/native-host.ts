@@ -4,79 +4,39 @@
  * Architecture:
  *   Chrome ↔ native-host (this) ↔ TCP:9333 ↔ WSL Relay ↔ Claude
  *
- * This is a PERSISTENT process - Chrome keeps it alive as long as we
- * respond to ping/get_status messages.
+ * This runs on Windows, spawned by Chrome when the extension connects.
+ * It stays alive as long as we respond to ping/get_status messages.
  */
 
 import * as net from 'net';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   MessageDecoder,
   RawMessageAccumulator,
   encodeMessage,
   LENGTH_PREFIX_SIZE,
 } from './protocol.js';
-import { createLogger, createLifecycle, VERSION, DEFAULT_BRIDGE_PORT } from './shared/index.js';
+import {
+  createFileLogger,
+  createLifecycle,
+  VERSION,
+  DEFAULT_BRIDGE_PORT,
+} from './shared/index.js';
 
-// Configuration
+// Configuration from environment
 const WSL_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || String(DEFAULT_BRIDGE_PORT), 10);
 const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
 
-// Setup file logging (in addition to stderr)
-const LOG_FILE = path.join(
-  process.env.LOCALAPPDATA || process.env.HOME || '.',
-  'ClaudeWSLBridge',
-  'native-host.log'
-);
+// Log directory (Windows: %LOCALAPPDATA%, fallback: home dir)
+const LOG_DIR = process.env.LOCALAPPDATA
+  ? `${process.env.LOCALAPPDATA}\\ClaudeWSLBridge`
+  : `${process.env.HOME || '.'}/.claude-wsl-bridge`;
 
-// Ensure log directory exists
-try {
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-} catch {
-  // Ignore
-}
-
-// Clear log on startup (keep previous run as .old for debugging)
-try {
-  if (fs.existsSync(LOG_FILE)) {
-    // Keep previous log for reference
-    fs.renameSync(LOG_FILE, LOG_FILE + '.old');
-  }
-} catch {
-  // Ignore
-}
-
-const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
-
-// Custom logger that writes to both stderr and file
-function createFileLogger(component: string, debugEnabled: boolean) {
-  const baseLogger = createLogger(component, debugEnabled);
-  const writeToFile = (message: string): void => {
-    logStream.write(`[${component}] ${new Date().toISOString()} ${message}\n`);
-  };
-
-  return {
-    log: (message: string): void => {
-      baseLogger.log(message);
-      writeToFile(message);
-    },
-    debug: (message: string): void => {
-      baseLogger.debug(message);
-      if (debugEnabled) {
-        writeToFile(`DEBUG: ${message}`);
-      }
-    },
-    error: (context: string, error: unknown): void => {
-      baseLogger.error(context, error);
-      const errMsg = error instanceof Error ? error.message : String(error);
-      writeToFile(`ERROR [${context}]: ${errMsg}`);
-    },
-  };
-}
-
-// Initialize shared utilities
-const logger = createFileLogger('native-host', DEBUG);
+// Initialize logger with file output (Windows stderr isn't easily visible)
+const logger = createFileLogger('native-host', DEBUG, {
+  logDir: LOG_DIR,
+  filename: 'native-host.log',
+  clearOnStartup: true,
+});
 const lifecycle = createLifecycle(logger);
 
 // State

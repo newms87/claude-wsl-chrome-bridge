@@ -1,31 +1,40 @@
 /**
- * WSL Relay - Bridges Windows Chrome Bridge to Claude's native host
+ * WSL Relay - Bridges Windows native-host to Claude's chrome-native-host
  *
  * Architecture:
- *   Chrome ↔ Windows native-host ↔ TCP ↔ WSL relay (this) ↔ Claude's native-host
+ *   Chrome ↔ Windows native-host ↔ TCP:9333 ↔ WSL relay (this) ↔ Claude's chrome-native-host
+ *
+ * This runs in WSL, started by the claude-chrome wrapper script.
+ * It connects to Windows over TCP and spawns Claude's native host locally.
  */
 
 import * as net from 'net';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { RawMessageAccumulator, encodeMessage, LENGTH_PREFIX_SIZE } from './protocol.js';
-import { createLogger, createLifecycle, VERSION, DEFAULT_BRIDGE_PORT } from './shared/index.js';
+import { RawMessageAccumulator, LENGTH_PREFIX_SIZE } from './protocol.js';
+import {
+  createLogger,
+  createLifecycle,
+  sleep,
+  VERSION,
+  DEFAULT_BRIDGE_PORT,
+} from './shared/index.js';
 
-// Configuration
+// Configuration from environment
 const TCP_PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || String(DEFAULT_BRIDGE_PORT), 10);
 const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === '1';
 
-// Retry configuration
+// Connection retry settings
 const MAX_RETRIES = 30;
 const RETRY_DELAY_MS = 2000;
-const CONNECTION_TIMEOUT = 5000;
+const CONNECTION_TIMEOUT_MS = 5000;
 
-// Initialize shared utilities
+// Initialize logger and lifecycle manager
 const logger = createLogger('wsl-relay', DEBUG);
 const lifecycle = createLifecycle(logger);
 
-// State
+// Connection state
 let tcpSocket: net.Socket | null = null;
 let claudeProcess: ChildProcess | null = null;
 const tcpAccumulator = new RawMessageAccumulator();
@@ -90,10 +99,6 @@ function findClaudeNativeHost(): string {
 const TCP_HOST = getWindowsHostIP();
 const CLAUDE_NATIVE_HOST = process.env.CLAUDE_NATIVE_HOST || findClaudeNativeHost();
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Send a framed message to TCP (to Windows bridge)
  */
@@ -141,8 +146,8 @@ async function connectWithRetry(): Promise<net.Socket> {
 
         const timeout = setTimeout(() => {
           s.destroy();
-          reject(new Error(`Connection timeout after ${CONNECTION_TIMEOUT}ms`));
-        }, CONNECTION_TIMEOUT);
+          reject(new Error(`Connection timeout after ${CONNECTION_TIMEOUT_MS}ms`));
+        }, CONNECTION_TIMEOUT_MS);
 
         s.once('connect', () => {
           clearTimeout(timeout);
