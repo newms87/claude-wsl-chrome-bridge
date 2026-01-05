@@ -144,13 +144,14 @@ Set-Content -Path (Join-Path $InstallDir "native-host.js") -Value $NativeHostCon
 Write-Success "Installed native-host.js"
 
 # Create launcher
-Set-Content -Path (Join-Path $InstallDir "native-host.bat") -Value '@echo off\\nnode "%~dp0native-host.js" %*' -Encoding ASCII
+Set-Content -Path (Join-Path $InstallDir "native-host.bat") -Value "@echo off\`r\`nnode \`"%~dp0native-host.js\`" %*" -Encoding ASCII
 Write-Success "Created launcher"
 
-# Create manifest
+# Create manifest (UTF8 without BOM - Chrome requires this)
 $ManifestPath = Join-Path $InstallDir "manifest.json"
 $Manifest = @{ name = $HostName; description = "Claude WSL Chrome Bridge"; path = (Join-Path $InstallDir "native-host.bat"); type = "stdio"; allowed_origins = @("chrome-extension://$ChromeExtensionId/") }
-$Manifest | ConvertTo-Json | Set-Content -Path $ManifestPath -Encoding UTF8
+$ManifestJson = $Manifest | ConvertTo-Json
+[System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, (New-Object System.Text.UTF8Encoding $false))
 Write-Success "Created manifest"
 
 # Register with Chrome

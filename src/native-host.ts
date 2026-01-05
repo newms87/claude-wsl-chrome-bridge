@@ -37,14 +37,14 @@ try {
   // Ignore
 }
 
-// Rotate log if too large (> 1MB)
+// Clear log on startup (keep previous run as .old for debugging)
 try {
-  const stats = fs.statSync(LOG_FILE);
-  if (stats.size > 1024 * 1024) {
+  if (fs.existsSync(LOG_FILE)) {
+    // Keep previous log for reference
     fs.renameSync(LOG_FILE, LOG_FILE + '.old');
   }
 } catch {
-  // File doesn't exist yet
+  // Ignore
 }
 
 const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
