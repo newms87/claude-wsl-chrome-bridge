@@ -41,7 +41,8 @@ const installer = `# Claude WSL Chrome Bridge - Self-Contained Installer v${VERS
 
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\\ClaudeWSLBridge",
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,7 +91,39 @@ if ($Uninstall) {
         if ($rule) { Remove-NetFirewallRule -DisplayName $FirewallRuleName; Write-Success "Removed firewall rule" }
     } catch { }
 
-    if (Test-Path $InstallDir) { Remove-Item -Path $InstallDir -Recurse -Force; Write-Success "Removed $InstallDir" }
+    if (Test-Path $InstallDir) {
+        # Try to remove, handle locked files
+        try {
+            Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+            Write-Success "Removed $InstallDir"
+        } catch {
+            if ($Force) {
+                Write-Warn "Files locked. Attempting to kill node processes..."
+                Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
+                    $_.Path -like "*node*" -or $_.CommandLine -like "*native-host*"
+                } | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                try {
+                    Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+                    Write-Success "Removed $InstallDir"
+                } catch {
+                    Write-Err "Still cannot remove $InstallDir"
+                    Write-Err "Close Chrome completely and try again"
+                    exit 1
+                }
+            } else {
+                Write-Err "Cannot remove $InstallDir - files are in use"
+                Write-Host ""
+                Write-Host "The native-host is running (launched by Chrome)." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "Options:" -ForegroundColor Yellow
+                Write-Host "  1. Close Chrome completely, then run uninstall again"
+                Write-Host "  2. Use -Force flag: " -NoNewline; Write-Host ".\install.ps1 -Uninstall -Force" -ForegroundColor Cyan
+                Write-Host ""
+                exit 1
+            }
+        }
+    }
 
     wsl.exe bash -c "rm -rf $WslLibDir $WslBinDir/claude-chrome 2>/dev/null; echo 'WSL cleanup done'"
 
