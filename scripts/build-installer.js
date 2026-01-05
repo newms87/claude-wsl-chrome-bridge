@@ -156,7 +156,7 @@ trap cleanup EXIT INT TERM
 > "$LOG_FILE"; node "$RELAY_JS" >> "$LOG_FILE" 2>&1 & RELAY_PID=$!
 sleep 1; kill -0 "$RELAY_PID" 2>/dev/null || { echo "Relay failed. See $LOG_FILE"; exit 1; }
 FAKE_VERSION="/tmp/fake_proc_version_$$"
-echo "Linux version 6.6.87-generic (gcc 11.4.0) #1 SMP $(date -u)" > "$FAKE_VERSION"
+echo "Linux version 6.6.87-generic" > "$FAKE_VERSION"
 exec unshare --user --map-root-user -m bash -c "mount --bind '$FAKE_VERSION' /proc/version; export CLAUDE_CODE_ENABLE_CFC=1; exec claude \\"\$@\\"" -- "$@"
 '@
 
